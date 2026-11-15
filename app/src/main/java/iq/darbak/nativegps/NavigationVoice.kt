@@ -55,6 +55,9 @@ class IraqiVoiceGuide(private val activity: Activity) : TextToSpeech.OnInitListe
                     arabic != TextToSpeech.LANG_NOT_SUPPORTED
             }
             tts.setSpeechRate(0.94f)
+            tts.setAudioAttributes(AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
         } catch (_: Exception) {
             ready = false
         }
