@@ -159,11 +159,14 @@ class MainActivity : Activity(), LocationListener {
             setPadding(dp(10), dp(5), dp(10), dp(5))
             gravity = Gravity.CENTER_VERTICAL
         }
-        val brand = txt("دَرْبَك ◈", 22f, true)
+        val brand = txt("دَرْبَك 3.0", 20f, true)
         status = txt("GPS قيد التحديد", 12f, false, muted)
-        head.addView(button("☰") { menu() }, LinearLayout.LayoutParams(dp(50), dp(49)))
+        head.addView(button("☰") { menu() }, LinearLayout.LayoutParams(dp(49), dp(49)))
+        head.addView(button("⚙") { appearance.show(::applyAppearance) }, LinearLayout.LayoutParams(dp(49), dp(49)).apply {
+            leftMargin = dp(5)
+        })
         head.addView(status, LinearLayout.LayoutParams(0, dp(49), 1f))
-        head.addView(brand, LinearLayout.LayoutParams(dp(116), dp(49)))
+        head.addView(brand, LinearLayout.LayoutParams(dp(123), dp(49)))
         add(root, head, Gravity.TOP or Gravity.CENTER_HORIZONTAL, -1, 61, 12, 12)
 
         val tools = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -174,7 +177,7 @@ class MainActivity : Activity(), LocationListener {
         tool("◎") { recenter() }
         tool("+") { map?.animateCamera(CameraUpdateFactory.zoomIn(), 230) }
         tool("−") { map?.animateCamera(CameraUpdateFactory.zoomOut(), 230) }
-        tool("☾") { night = !night; loadStyle() }
+        tool("🎨") { appearance.show(::applyAppearance) }
         tool("🛣") { routeController.showChoicesOrCalculate() }
         tool("♫") { routeController.repeatVoice() }
         add(root, tools, Gravity.END or Gravity.CENTER_VERTICAL, 50, -2, 13)
@@ -207,7 +210,51 @@ class MainActivity : Activity(), LocationListener {
         bottom.addView(quick, LinearLayout.LayoutParams(-1, dp(58)))
         routeInfo = txt("اضغط على الخريطة لاختيار وجهتك", 13f, false, muted)
         bottom.addView(routeInfo, LinearLayout.LayoutParams(-1, dp(41)))
-        add(root, bottom, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL, -1, -2, 0)
+        bottomPanel = bottom
+        add(root, bottomPanel, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL, -1, -2, 0)
+
+        // Turn-by-turn navigation HUD, visible ONLY after the user starts a trip.
+        drivePanel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = box(ink, 23)
+            setPadding(dp(16), dp(10), dp(16), dp(10))
+        }
+        val bannerHeader = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val turnEmblem = txt("➤", 32f, true, teal).apply { background = box(panel, 16) }
+        bannerHeader.addView(turnEmblem, LinearLayout.LayoutParams(dp(56), dp(61)))
+        val texts = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(10),0,0,0)
+        }
+        driveTitle = txt("اتبع المسار المختار", 19f, true).apply {
+            gravity = Gravity.RIGHT or Gravity.CENTER_VERTICAL
+            maxLines = 2
+        }
+        driveDetail = txt("GPS فعّال • انتبه للطريق", 12f, false, muted).apply {
+            gravity = Gravity.RIGHT or Gravity.CENTER_VERTICAL
+            maxLines = 2
+        }
+        texts.addView(driveTitle,LinearLayout.LayoutParams(-1,dp(39)))
+        texts.addView(driveDetail,LinearLayout.LayoutParams(-1,dp(26)))
+        bannerHeader.addView(texts,LinearLayout.LayoutParams(0,dp(65),1f))
+        drivePanel.addView(bannerHeader,LinearLayout.LayoutParams(-1,dp(65)))
+        val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        fun action(label: String, click: () -> Unit) {
+            val b = button(label,click).apply { textSize = 14f }
+            actions.addView(b,LinearLayout.LayoutParams(0,dp(42),1f).apply {
+                setMargins(dp(2),dp(4),dp(2),0)
+            })
+        }
+        action("⏹ إنهاء") { routeController.endNavigation() }
+        action("🔊 كرر") { routeController.repeatVoice() }
+        action("⚙ الإعدادات") { appearance.show(::applyAppearance) }
+        drivePanel.addView(actions,LinearLayout.LayoutParams(-1,dp(48)))
+        drivePanel.visibility = View.GONE
+        add(root,drivePanel,Gravity.TOP or Gravity.CENTER_HORIZONTAL,-1,-2,12,86)
+        setDrivingVisibility()
     }
     private fun mapIcon(color: Int): Icon {
         val bmp = Bitmap.createBitmap(72, 72, Bitmap.Config.ARGB_8888)
@@ -375,57 +422,70 @@ class MainActivity : Activity(), LocationListener {
         }
     }
     override fun onLocationChanged(loc: Location) {
-        if (loc.hasAccuracy() && loc.accuracy > 160f) return
+        if (loc.hasAccuracy() && loc.accuracy > (if (navigationalMode) 100f else 160f)) return
+        val previous = current
+        if (previous != null && loc.time + 1000L < previous.time) return
         current = loc
-        status.text = "● GPS متصل"
-        val kph = (if (loc.hasSpeed()) loc.speed * 3.6f else 0f).roundToInt()
+        status.text = if (loc.hasAccuracy()) "● GPS ±" + loc.accuracy.roundToInt() + "م" else "● GPS متصل"
+        val kph = (if (loc.hasSpeed()) loc.speed * 3.6f else 0f).roundToInt().coerceAtLeast(0)
         speed.text = kph.toString() + "\nكم/س"
+        if (loc.hasBearing() && (!loc.hasSpeed() || loc.speed > 1.8f)) {
+            lastHeading = smoothBearing(lastHeading, loc.bearing.toDouble())
+        } else if (previous != null && previous.distanceTo(loc) > 15f) {
+            lastHeading = smoothBearing(lastHeading, previous.bearingTo(loc).toDouble())
+        }
         routeController.onLocationChanged(loc)
         updateUserPin(loc)
-        if (follow && System.currentTimeMillis() - lastCameraAt > 2200) {
+        if (follow && System.currentTimeMillis() - lastCameraAt > 1100L) {
             lastCameraAt = System.currentTimeMillis()
-            val m = map ?: return
-            val bearing = if (loc.hasBearing() && loc.speed > 2f) loc.bearing.toDouble() else m.cameraPosition.bearing
-            m.animateCamera(CameraUpdateFactory.newCameraPosition(CameraPosition.Builder()
-                .target(LatLng(loc.latitude, loc.longitude))
-                .zoom(m.cameraPosition.zoom.coerceAtLeast(15.2))
-                .bearing(bearing).build()), 440)
+            followCamera(loc)
         }
     }
     private fun recenter() {
         follow = true
-        val p = current ?: run {
-            Toast.makeText(this, "بانتظار إشارة الموقع", Toast.LENGTH_SHORT).show()
+        val loc = current ?: run {
+            Toast.makeText(this, "بانتظار GPS… شغّل الموقع الدقيق", Toast.LENGTH_SHORT).show()
             if (hasPermission()) startGps()
             return
         }
-        map?.animateCamera(CameraUpdateFactory.newCameraPosition(CameraPosition.Builder()
-            .target(LatLng(p.latitude, p.longitude)).zoom(16.2).build()), 580)
+        followCamera(loc,true)
     }
     private fun menu() {
-        val opts = arrayOf("وضع ليلي / نهاري", "تحديد موقعي", "تغيير الطريق", "إعادة التعليمات الصوتية", "اختبار الصوت العراقي", "تشغيل / كتم الصوت", "تجنب الشوارع الترابية", "حذف الوجهة")
-        AlertDialog.Builder(this).setTitle("دَرْبَك").setItems(opts) { _, index ->
-            when (index) {
-                0 -> { night = !night; loadStyle() }
-                1 -> recenter()
-                2 -> routeController.showChoicesOrCalculate()
-                3 -> routeController.repeatVoice()
-                4 -> voice.test()
-                5 -> {
-                    voice.enabled = !voice.enabled
-                    Toast.makeText(this, if (voice.enabled) "الصوت شغّال" else "الصوت مكتوم", Toast.LENGTH_SHORT).show()
-                    if (voice.enabled) voice.test()
+        val options = arrayOf(
+            "⚙ الإعدادات والثيمات",
+            "🧭 تتبّع مركبتي",
+            "🛣 اختيار مسار الرحلة",
+            "🔊 إعادة التعليمات الصوتية",
+            "🎙 اختبار الصوت العراقي",
+            "🔇 تشغيل / كتم الصوت",
+            "🚧 تفضيل تجنب الطرق الترابية",
+            "⏹ إنهاء القيادة",
+            "🗑 مسح الوجهة"
+        )
+        AlertDialog.Builder(this).setTitle("دَرْبَك 3.0 — القائمة")
+            .setItems(options) { _, index ->
+                when (index) {
+                    0 -> appearance.show(::applyAppearance)
+                    1 -> recenter()
+                    2 -> routeController.showChoicesOrCalculate()
+                    3 -> routeController.repeatVoice()
+                    4 -> voice.test()
+                    5 -> {
+                        appearance.setVoice(!appearance.voice)
+                        applyAppearance("voice")
+                        Toast.makeText(this, if (voice.enabled) "الصوت شغال" else "الصوت مكتوم", Toast.LENGTH_SHORT).show()
+                    }
+                    6 -> routeController.toggleAvoidUnpaved()
+                    7 -> routeController.endNavigation()
+                    8 -> {
+                        target = null
+                        targetMarker?.let { map?.removeMarker(it) }
+                        targetMarker = null
+                        routeController.clear()
+                        routeInfo.setTextColor(muted)
+                    }
                 }
-                6 -> routeController.toggleAvoidUnpaved()
-                7 -> {
-                    target = null
-                    targetMarker?.let { map?.removeMarker(it) }
-                    targetMarker = null
-                    routeController.clear()
-                    routeInfo.setTextColor(muted)
-                }
-            }
-        }.show()
+            }.show()
     }
     private fun promptSearch() {
         val input = EditText(this).apply {
