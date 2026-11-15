@@ -4,7 +4,7 @@ on:
     branches: [main]
   workflow_dispatch:
 permissions:
-  contents: write
+  contents: read
 jobs:
   apk:
     runs-on: ubuntu-latest
@@ -33,34 +33,12 @@ jobs:
           echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$ANDROID_HOME" --licenses >/dev/null || true
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$ANDROID_HOME" "platforms;android-35" "build-tools;35.0.0" "platform-tools"
-      - name: Embed Iraqi ElevenLabs MP3 speech recordings
-        env:
-          VOICE_LEFT: "https://elevenlabsusercontent.com/database/workspace/79515f23ee8b4218b7a334e1aa033056/content_generation/A2fLqXLjTN9YnDRcGw6d/GoqKiKvdw2Q4hTCbjwnE/content.mp3?Expires=1794751200&KeyName=assets-cdn-key-1&Signature=iaK7VvNp7dVO3e2D_FBraJ9Ww24="
-          VOICE_RIGHT: "https://elevenlabsusercontent.com/database/workspace/79515f23ee8b4218b7a334e1aa033056/content_generation/DzB6wfpsBzFd5MQPElPE/pcZx0nXDmd5r1VcUE8yR/content.mp3?Expires=1794751200&KeyName=assets-cdn-key-1&Signature=ID4rkJhlV2EdDYXYcPDBNYmj6g8="
-          VOICE_ARRIVED: "https://elevenlabsusercontent.com/database/workspace/79515f23ee8b4218b7a334e1aa033056/content_generation/Y7gxrvGAxD8ceIgbRv07/kn8f0GmivRYQayUVDdxt/content.mp3?Expires=1794751200&KeyName=assets-cdn-key-1&Signature=ytfPmdd9dKFr-71AjBaDj5f7cU8="
+      - name: Verify bundled Iraqi voice recordings
         run: |
-          set -euo pipefail
-          mkdir -p app/src/main/res/raw
-          if [ ! -s app/src/main/res/raw/turn_left.mp3 ]; then
-            curl -fLSs --retry 3 "$VOICE_LEFT" -o app/src/main/res/raw/turn_left.mp3
-          fi
-          if [ ! -s app/src/main/res/raw/turn_right.mp3 ]; then
-            curl -fLSs --retry 3 "$VOICE_RIGHT" -o app/src/main/res/raw/turn_right.mp3
-          fi
-          if [ ! -s app/src/main/res/raw/arrived.mp3 ]; then
-            curl -fLSs --retry 3 "$VOICE_ARRIVED" -o app/src/main/res/raw/arrived.mp3
-          fi
-          for clip in app/src/main/res/raw/*.mp3; do
-            test "$(stat -c%s "$clip")" -gt 5000
+          for clip in app/src/main/res/raw/turn_left.mp3 app/src/main/res/raw/turn_right.mp3 app/src/main/res/raw/arrived.mp3; do
+            test -s "$clip"
             file "$clip"
           done
-          git config user.name "darbak-build-bot"
-          git config user.email "darbak-build-bot@users.noreply.github.com"
-          git add app/src/main/res/raw
-          if ! git diff --cached --quiet; then
-            git commit -m "Add Iraqi voice recordings [skip ci]"
-            git push origin HEAD:main
-          fi
       - name: Assemble signed debug APK
         run: gradle --no-daemon :app:assembleDebug --stacktrace
       - name: Upload installable APK
