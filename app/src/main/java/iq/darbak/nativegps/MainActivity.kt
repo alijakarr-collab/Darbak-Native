@@ -63,8 +63,8 @@ class MainActivity : Activity(), LocationListener {
     private var target: LatLng? = null
     private var userMarker: Marker? = null
     private var targetMarker: Marker? = null
-    private var routeLine: Polyline? = null
-    private var routePoints: List<LatLng>? = null
+    private lateinit var voice: IraqiVoiceGuide
+    private lateinit var routeController: RouteController
     private var follow = true
     private var night = true
     private var loadingStyle = false
@@ -86,6 +86,11 @@ class MainActivity : Activity(), LocationListener {
         root.addView(mapView, FrameLayout.LayoutParams(-1, -1))
         setContentView(root)
         makeOverlay(root)
+        voice = IraqiVoiceGuide(this)
+        routeController = RouteController(this, voice) { message ->
+            routeInfo.text = message
+        }
+        routeInfo.setOnClickListener { routeController.showChoicesOrCalculate() }
         mapView.getMapAsync { m ->
             map = m
             m.uiSettings.isCompassEnabled = true
@@ -205,12 +210,9 @@ class MainActivity : Activity(), LocationListener {
             status.text = if (current != null) "● GPS متصل" else "GPS قيد التحديد"
             targetMarker = null
             userMarker = null
-            routeLine = null
             current?.let { updateUserPin(it) }
             target?.let { targetMarker = m.addMarker(MarkerOptions().position(it).icon(targetIcon)) }
-            routePoints?.let { points ->
-                if (points.size >= 2) routeLine = m.addPolyline(PolylineOptions().addAll(points).width(7f).color(teal))
-            }
+            routeController.onMapStyleLoaded(m)
         }
         ui.postDelayed({
             if (loadingStyle) {
@@ -224,9 +226,10 @@ class MainActivity : Activity(), LocationListener {
         val m = map ?: return
         targetMarker?.let { m.removeMarker(it) }
         targetMarker = m.addMarker(MarkerOptions().position(p).icon(targetIcon).title("الوجهة"))
-        routeInfo.text = "احسب المسار للوجهة المحددة — اضغط هنا"
+        routeInfo.text = "الوجهة محددة، جاري البحث عن الطرق…"
         routeInfo.setTextColor(teal)
-        routeInfo.setOnClickListener { calcRoute() }
+        routeInfo.setOnClickListener { routeController.showChoicesOrCalculate() }
+        routeController.selectDestination(p)
     }
     private fun updateUserPin(loc: Location) {
         val m = map ?: return
@@ -259,6 +262,7 @@ class MainActivity : Activity(), LocationListener {
         val kph = (if (loc.hasSpeed()) loc.speed * 3.6f else 0f).roundToInt()
         speed.text = kph.toString() + "\nكم/س"
         updateUserPin(loc)
+        routeController.onLocationChanged(loc)
         if (follow && System.currentTimeMillis() - lastCameraAt > 2200) {
             lastCameraAt = System.currentTimeMillis()
             val m = map ?: return
@@ -280,22 +284,24 @@ class MainActivity : Activity(), LocationListener {
             .target(LatLng(p.latitude, p.longitude)).zoom(16.2).build()), 580)
     }
     private fun menu() {
-        val opts = arrayOf("وضع ليلي / نهاري", "تحديد موقعي", "إعادة حساب المسار", "حذف الوجهة")
+        val opts = arrayOf("وضع ليلي / نهاري", "تحديد موقعي", "تغيير الطريق", "اختبار الصوت العراقي", "تشغيل / كتم الصوت", "حذف الوجهة")
         AlertDialog.Builder(this).setTitle("دَرْبَك").setItems(opts) { _, index ->
             when (index) {
                 0 -> { night = !night; loadStyle() }
                 1 -> recenter()
-                2 -> calcRoute()
-                3 -> {
+                2 -> routeController.showChoicesOrCalculate()
+                3 -> voice.test()
+                4 -> {
+                    voice.enabled = !voice.enabled
+                    Toast.makeText(this, if (voice.enabled) "الصوت شغّال" else "الصوت مكتوم", Toast.LENGTH_SHORT).show()
+                    if (voice.enabled) voice.test()
+                }
+                5 -> {
                     target = null
                     targetMarker?.let { map?.removeMarker(it) }
                     targetMarker = null
-                    routeLine?.let { map?.removePolyline(it) }
-                    routeLine = null
-                    routePoints = null
-                    routeInfo.text = "اضغط على الخريطة لاختيار وجهتك"
+                    routeController.clear()
                     routeInfo.setTextColor(muted)
-                    routeInfo.setOnClickListener(null)
                 }
             }
         }.show()
@@ -330,42 +336,6 @@ class MainActivity : Activity(), LocationListener {
             }
         }
     }
-    private fun calcRoute() {
-        val from = current
-        val dest = target
-        if (from == null || dest == null) {
-            Toast.makeText(this, "حدد موقعك والوجهة أولاً", Toast.LENGTH_SHORT).show()
-            return
-        }
-        routeInfo.text = "جاري حساب المسار…"
-        executor.execute {
-            try {
-                val url = "https://router.project-osrm.org/route/v1/driving/" +
-                    from.longitude.toString() + "," + from.latitude.toString() + ";" +
-                    dest.longitude.toString() + "," + dest.latitude.toString() +
-                    "?overview=full&geometries=geojson"
-                val obj = JSONObject(getUrl(url)).getJSONArray("routes").getJSONObject(0)
-                val coords = obj.getJSONObject("geometry").getJSONArray("coordinates")
-                val points = ArrayList<LatLng>()
-                for (i in 0 until coords.length()) {
-                    val pair = coords.getJSONArray(i)
-                    points.add(LatLng(pair.getDouble(1), pair.getDouble(0)))
-                }
-                val km = obj.getDouble("distance") / 1000.0
-                val minutes = (obj.getDouble("duration") / 60.0).roundToInt()
-                ui.post {
-                    val m = map ?: return@post
-                    routeLine?.let { m.removePolyline(it) }
-                    routePoints = points
-                    routeLine = m.addPolyline(PolylineOptions().addAll(points).width(7f).color(teal))
-                    routeInfo.text = String.format(Locale.US, "%.1f كم • %d دقيقة تقريباً", km, minutes)
-                    routeInfo.setTextColor(Color.WHITE)
-                }
-            } catch (_: Exception) {
-                ui.post { routeInfo.text = "حساب المسار غير متاح حالياً" }
-            }
-        }
-    }
     private fun getUrl(url: String): String {
         val conn = URL(url).openConnection() as HttpURLConnection
         conn.connectTimeout = 6000
@@ -393,5 +363,12 @@ class MainActivity : Activity(), LocationListener {
     override fun onStop() { mapView.onStop(); super.onStop() }
     override fun onLowMemory() { super.onLowMemory(); mapView.onLowMemory() }
     override fun onSaveInstanceState(state: Bundle) { super.onSaveInstanceState(state); mapView.onSaveInstanceState(state) }
-    override fun onDestroy() { locationManager.removeUpdates(this); executor.shutdownNow(); mapView.onDestroy(); super.onDestroy() }
+    override fun onDestroy() {
+        locationManager.removeUpdates(this)
+        executor.shutdownNow()
+        routeController.release()
+        voice.release()
+        mapView.onDestroy()
+        super.onDestroy()
+    }
 }
