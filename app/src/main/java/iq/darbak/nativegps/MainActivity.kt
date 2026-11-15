@@ -40,6 +40,12 @@ import org.maplibre.android.geometry.LatLng
 import org.maplibre.android.maps.MapLibreMap
 import org.maplibre.android.maps.MapView
 import org.maplibre.android.maps.Style
+import org.maplibre.android.style.sources.GeoJsonSource
+import org.maplibre.android.style.layers.SymbolLayer
+import org.maplibre.android.style.layers.Property
+import org.maplibre.android.style.layers.PropertyFactory
+import com.mapbox.geojson.Feature
+import com.mapbox.geojson.Point
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
@@ -73,7 +79,11 @@ class MainActivity : Activity(), LocationListener {
     private var map: MapLibreMap? = null
     private var current: Location? = null
     private var target: LatLng? = null
-    private var userMarker: Marker? = null
+    private var userSource: GeoJsonSource? = null
+    private var userLayer: SymbolLayer? = null
+    private val vehicleSpriteId = "darbak-live-vehicle-v4"
+    private val vehicleSourceId = "darbak-live-location-v4"
+    private val vehicleLayerId = "darbak-live-symbol-v4"
     private var targetMarker: Marker? = null
     private lateinit var voice: IraqiVoiceGuide
     private lateinit var routeController: RouteController
@@ -276,7 +286,9 @@ class MainActivity : Activity(), LocationListener {
             loadingStyle = false
             status.text = if (current != null) "● GPS متصل" else "GPS قيد التحديد"
             targetMarker = null
-            userMarker = null
+            userSource = null
+            userLayer = null
+            setupVehicleLayer(m)
             current?.let { updateUserPin(it) }
             target?.let { targetMarker = m.addMarker(MarkerOptions().position(it).icon(targetIcon)) }
             routeController.onMapStyleLoaded(m)
@@ -302,18 +314,55 @@ class MainActivity : Activity(), LocationListener {
         routeInfo.setOnClickListener { routeController.showChoicesOrCalculate() }
         routeController.selectDestination(p)
     }
+    // MapLibre annotation Markers are deprecated and can fail to refresh when changing
+    // custom icons. Use a native style SymbolLayer with an updating GeoJSON source instead.
+    private fun setupVehicleLayer(m: MapLibreMap) {
+        val style = m.style ?: return
+        val initial = current?.let { routeController.snappedPosition(it) ?: LatLng(it.latitude,it.longitude) }
+            ?: LatLng(32.615,44.027)
+        try {
+            style.addImage(vehicleSpriteId, vehicleIcons.bitmap(appearance.vehicle,teal))
+            val source = GeoJsonSource(vehicleSourceId,
+                Feature.fromGeometry(Point.fromLngLat(initial.longitude,initial.latitude)))
+            style.addSource(source)
+            val layer = SymbolLayer(vehicleLayerId,vehicleSourceId).withProperties(
+                PropertyFactory.iconImage(vehicleSpriteId),
+                PropertyFactory.iconAllowOverlap(true),
+                PropertyFactory.iconIgnorePlacement(true),
+                PropertyFactory.iconSize(0.86f),
+                PropertyFactory.iconRotationAlignment(Property.ICON_ROTATION_ALIGNMENT_MAP),
+                PropertyFactory.iconPitchAlignment(Property.ICON_PITCH_ALIGNMENT_VIEWPORT),
+                PropertyFactory.iconRotate(0f)
+            )
+            style.addLayer(layer)
+            userSource = source
+            userLayer = layer
+            // Without GPS permission, do not show a false blue dot at an example location.
+            if (current == null) layer.setProperties(PropertyFactory.visibility(Property.NONE))
+        } catch (e: Exception) {
+            android.util.Log.e("DarbakGPS","Vehicle style icon setup failed",e)
+        }
+    }
+    private fun refreshVehicleSymbol() {
+        val style = map?.style ?: return
+        try {
+            style.addImage(vehicleSpriteId,vehicleIcons.bitmap(appearance.vehicle,teal))
+            userLayer?.setProperties(PropertyFactory.iconImage(vehicleSpriteId))
+            current?.let { updateUserPin(it) }
+        } catch (e: Exception) {
+            android.util.Log.e("DarbakGPS","Failed to change car / motorcycle icon",e)
+        }
+    }
     private fun updateUserPin(loc: Location) {
         val m = map ?: return
-        val point = routeController.snappedPosition(loc) ?: LatLng(loc.latitude, loc.longitude)
-        val heading = if (navigationalMode && follow && appearance.perspective) 0f
-            else (((lastHeading - m.cameraPosition.bearing + 360.0) % 360.0).toFloat())
-        val carIcon = vehicleIcons.icon(appearance.vehicle, teal, heading)
-        if (userMarker == null) userMarker = m.addMarker(MarkerOptions().position(point).icon(carIcon))
-        else {
-            userMarker!!.position = point
-            userMarker!!.icon = carIcon
-            m.updateMarker(userMarker!!)
-        }
+        if (userSource == null || userLayer == null) setupVehicleLayer(m)
+        val point = routeController.snappedPosition(loc) ?: LatLng(loc.latitude,loc.longitude)
+        val feature = Feature.fromGeometry(Point.fromLngLat(point.longitude,point.latitude))
+        userSource?.setGeoJson(feature)
+        userLayer?.setProperties(
+            PropertyFactory.visibility(Property.VISIBLE),
+            PropertyFactory.iconRotate(lastHeading.toFloat())
+        )
     }
     private fun smoothBearing(current: Double, desired: Double): Double {
         val delta = ((desired - current + 540.0) % 360.0) - 180.0
@@ -352,7 +401,7 @@ class MainActivity : Activity(), LocationListener {
         routeController.setAccent(teal)
         if (kind == "vehicle" || kind == "color") {
             vehicleIcons.clear()
-            current?.let { updateUserPin(it) }
+            refreshVehicleSymbol()
         }
         if (kind == "camera") {
             follow = appearance.follow
