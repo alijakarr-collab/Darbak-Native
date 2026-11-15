@@ -160,7 +160,7 @@ class MainActivity : Activity(), LocationListener {
     private fun imageButton(drawableId: Int, description: String, action: () -> Unit): ImageView {
         return ImageView(this).apply {
             setImageResource(drawableId)
-            imageTintList = ColorStateList.valueOf(foreground)
+            imageTintList = ColorStateList.valueOf(this@MainActivity.foreground)
             contentDescription = description
             setPadding(dp(13), dp(13), dp(13), dp(13))
             background = box(panel, 14)
