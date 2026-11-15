@@ -88,7 +88,6 @@ class MainActivity : Activity(), LocationListener {
         makeOverlay(root)
         mapView.getMapAsync { m ->
             map = m
-            m.uiSettings.isZoomControlsEnabled = false
             m.uiSettings.isCompassEnabled = true
             m.uiSettings.isAttributionEnabled = true
             m.uiSettings.isLogoEnabled = true
