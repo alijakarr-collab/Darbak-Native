@@ -32,9 +32,10 @@ import kotlin.math.roundToInt
 class RouteController(
     private val activity: Activity,
     private val voice: IraqiVoiceGuide,
-    private val showMessage: (String) -> Unit
+    private val showMessage: (String) -> Unit,
+    private val onNavigationState: (Boolean) -> Unit = {}
 ) {
-    private val teal = Color.rgb(17, 204, 169)
+    private var teal = Color.rgb(17, 204, 169)
     private val handler = Handler(Looper.getMainLooper())
     private val executor = Executors.newSingleThreadExecutor()
     private val repository = RouteRepository()
@@ -50,6 +51,12 @@ class RouteController(
     private val warnedNear = HashSet<Int>()
     var avoidUnpaved = false
         private set
+    var autoReroute = true
+    fun isNavigating(): Boolean = navigating
+    fun setAccent(color: Int) {
+        teal = color
+        renderRoutes()
+    }
     private val outlines = ArrayList<Polyline>()
     private var map: MapLibreMap? = null
     private var location: Location? = null
@@ -95,6 +102,7 @@ class RouteController(
         }
     }
     fun selectDestination(dest: LatLng) {
+        if (navigating) onNavigationState(false)
         destination = dest
         requestVersion++
         calculating = false
@@ -108,6 +116,7 @@ class RouteController(
         } else calculate()
     }
     fun clear() {
+        if (navigating) onNavigationState(false)
         requestVersion++
         calculating = false
         destination = null
@@ -153,7 +162,10 @@ class RouteController(
                 handler.post {
                     if (version != requestVersion) return@post
                     calculating = false
-                    if (resumeAfter) navigating = false
+                    if (resumeAfter) {
+                        navigating = false
+                        onNavigationState(false)
+                    }
                     showMessage("تعذّر حساب الطريق، راجع الإنترنت وجرّب من جديد")
                 }
             }
@@ -299,6 +311,7 @@ class RouteController(
     private fun begin() {
         if (chosenIndex !in routes.indices) return
         navigating = true
+        onNavigationState(true)
         cursor = 0
         for (t in routes[chosenIndex].turns) t.warned = false
         val selected = routes[chosenIndex]
@@ -381,7 +394,7 @@ class RouteController(
         val threshold = maxOf(65.0, (if (loc.hasAccuracy()) loc.accuracy.toDouble() else 25.0) * 2.4)
         if (match.error > threshold && (!loc.hasSpeed() || loc.speed >= 1.5f)) {
             offRouteSamples++
-            if (offRouteSamples >= 4 && !calculating && System.currentTimeMillis() - lastRerouteMs > 22000) {
+            if (autoReroute && offRouteSamples >= 4 && !calculating && System.currentTimeMillis() - lastRerouteMs > 22000) {
                 lastRerouteMs = System.currentTimeMillis()
                 offRouteSamples = 0
                 voice.say("طلعت عن الطريق، جاي أحسب مسار جديد")
@@ -412,6 +425,7 @@ class RouteController(
                 cursor++
                 if (turn.type == "arrive") {
                     navigating = false
+                    onNavigationState(false)
                     showMessage("وصلت لوجهتك، الحمد لله عالسلامة")
                     if (!turn.warned) voice.announceTurn(turn)
                     return
