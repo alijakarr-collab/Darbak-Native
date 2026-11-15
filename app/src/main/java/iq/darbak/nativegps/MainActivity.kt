@@ -204,14 +204,20 @@ class MainActivity : Activity(), LocationListener {
             tools.addView(button(text, task), LinearLayout.LayoutParams(dp(50), dp(49)))
             tools.addView(View(this), LinearLayout.LayoutParams(dp(1), dp(9)))
         }
-        tool("◎") { recenter() }
+        tools.addView(imageButton(R.drawable.ic_darbak_navigation,"تتبع الموقع GPS") {
+            recenter()
+        },LinearLayout.LayoutParams(dp(50),dp(49)))
+        tools.addView(View(this),LinearLayout.LayoutParams(dp(1),dp(9)))
         tool("+") { map?.animateCamera(CameraUpdateFactory.zoomIn(), 230) }
         tool("−") { map?.animateCamera(CameraUpdateFactory.zoomOut(), 230) }
         tools.addView(imageButton(R.drawable.ic_darbak_gauge,"إعدادات العدادات") {
             appearance.show(::applyAppearance,2)
         },LinearLayout.LayoutParams(dp(50),dp(49)))
         tools.addView(View(this),LinearLayout.LayoutParams(dp(1),dp(9)))
-        tool("🛣") { routeController.showChoicesOrCalculate() }
+        tools.addView(imageButton(R.drawable.ic_darbak_car,"اختيار أفضل مسار") {
+            routeController.showChoicesOrCalculate()
+        },LinearLayout.LayoutParams(dp(50),dp(49)))
+        tools.addView(View(this),LinearLayout.LayoutParams(dp(1),dp(9)))
         tools.addView(imageButton(R.drawable.ic_darbak_volume,"إعادة تعليمات الملاحة") {
             routeController.repeatVoice()
         },LinearLayout.LayoutParams(dp(50),dp(49)))
