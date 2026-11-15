@@ -45,6 +45,7 @@ class RouteController(
     private var offRouteSamples = 0
     private var lastRerouteMs = 0L
     private var lastInfoMs = 0L
+    private var lastCalculateMs = 0L
     private val warnedFar = HashSet<Int>()
     private val warnedNear = HashSet<Int>()
     var avoidUnpaved = false
@@ -67,7 +68,7 @@ class RouteController(
     }
     fun onLocationChanged(loc: Location) {
         location = loc
-        if (destination != null && routes.isEmpty() && !calculating) calculate()
+        if (destination != null && routes.isEmpty() && !calculating && System.currentTimeMillis() - lastCalculateMs > 25000L) calculate()
         if (navigating) checkTurn(loc)
     }
     fun toggleAvoidUnpaved() {
@@ -129,6 +130,7 @@ class RouteController(
         }
         if (calculating) return
         calculating = true
+        lastCalculateMs = System.currentTimeMillis()
         val version = ++requestVersion
         val preference = avoidUnpaved
         showMessage("جاري إيجاد أفضل المسارات والبدائل…")
@@ -151,6 +153,7 @@ class RouteController(
                 handler.post {
                     if (version != requestVersion) return@post
                     calculating = false
+                    if (resumeAfter) navigating = false
                     showMessage("تعذّر حساب الطريق، راجع الإنترنت وجرّب من جديد")
                 }
             }
