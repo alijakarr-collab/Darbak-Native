@@ -18,6 +18,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
+import android.view.WindowManager
 import android.view.View
 import android.widget.EditText
 import android.widget.FrameLayout
@@ -48,11 +49,22 @@ import kotlin.math.roundToInt
 
 @Suppress("DEPRECATION")
 class MainActivity : Activity(), LocationListener {
-    private val ink = Color.rgb(20, 24, 34)
-    private val panel = Color.rgb(30, 35, 48)
-    private val teal = Color.rgb(17, 204, 169)
-    private val violet = Color.rgb(140, 112, 255)
-    private val muted = Color.rgb(165, 175, 193)
+    private lateinit var appearance: DarbakAppearance
+    private lateinit var vehicleIcons: DarbakVehicleIcons
+    private lateinit var uiRoot: FrameLayout
+    private lateinit var bottomPanel: LinearLayout
+    private lateinit var drivePanel: LinearLayout
+    private lateinit var driveTitle: TextView
+    private lateinit var driveDetail: TextView
+    private var lastMessage = "اضغط على الخريطة لاختيار وجهتك"
+    private var lastHeading = 0.0
+    private var pendingStyle = false
+    private var navigationalMode = false
+    private val ink: Int get() = appearance.theme.panel
+    private val panel: Int get() = appearance.theme.panelSecondary
+    private val teal: Int get() = appearance.accent.color
+    private val muted: Int get() = if (appearance.theme.dark) Color.rgb(169, 182, 199) else Color.rgb(82, 96, 110)
+    private val foreground: Int get() = appearance.theme.label
     private lateinit var mapView: MapView
     private lateinit var locationManager: LocationManager
     private lateinit var status: TextView
@@ -66,30 +78,36 @@ class MainActivity : Activity(), LocationListener {
     private lateinit var voice: IraqiVoiceGuide
     private lateinit var routeController: RouteController
     private var follow = true
-    private var night = true
     private var loadingStyle = false
     private var lastCameraAt = 0L
     private val executor = Executors.newSingleThreadExecutor()
     private val ui = Handler(Looper.getMainLooper())
-    private val userIcon by lazy { mapIcon(violet) }
-    private val targetIcon by lazy { mapIcon(teal) }
+    private val targetIcon: Icon get() = mapIcon(teal)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        appearance = DarbakAppearance(this)
+        vehicleIcons = DarbakVehicleIcons(this)
+        follow = appearance.follow
         MapLibre.getInstance(applicationContext)
         window.statusBarColor = ink
         window.navigationBarColor = ink
         locationManager = getSystemService(Context.LOCATION_SERVICE) as LocationManager
         mapView = MapView(this)
         mapView.onCreate(savedInstanceState)
-        val root = FrameLayout(this)
-        root.addView(mapView, FrameLayout.LayoutParams(-1, -1))
-        setContentView(root)
-        makeOverlay(root)
+        uiRoot = FrameLayout(this)
+        uiRoot.addView(mapView, FrameLayout.LayoutParams(-1, -1))
+        setContentView(uiRoot)
+        makeOverlay(uiRoot)
         voice = IraqiVoiceGuide(this)
-        routeController = RouteController(this, voice) { message ->
+        voice.enabled = appearance.voice
+        routeController = RouteController(this, voice, { message ->
+            lastMessage = message
             routeInfo.text = message
-        }
+            if (navigationalMode) updateDriveMessage(message)
+        }, { active -> setDrivingMode(active) })
+        routeController.autoReroute = appearance.reroute
+        routeController.setAccent(teal)
         routeInfo.setOnClickListener { routeController.showChoicesOrCalculate() }
         mapView.getMapAsync { m ->
             map = m
@@ -113,7 +131,7 @@ class MainActivity : Activity(), LocationListener {
         cornerRadius = dp(radius).toFloat()
         setStroke(dp(1), Color.rgb(58, 66, 81))
     }
-    private fun txt(value: String, size: Float, bold: Boolean = false, color: Int = Color.WHITE): TextView {
+    private fun txt(value: String, size: Float, bold: Boolean = false, color: Int = foreground): TextView {
         return TextView(this).apply {
             text = value
             textSize = size
@@ -124,7 +142,7 @@ class MainActivity : Activity(), LocationListener {
         }
     }
     private fun button(value: String, action: () -> Unit): TextView {
-        return txt(value, 19f, true).apply {
+        return txt(value, 19f, true, foreground).apply {
             background = box(panel, 15)
             setOnClickListener { action() }
         }
@@ -203,10 +221,10 @@ class MainActivity : Activity(), LocationListener {
     }
     private fun loadStyle() {
         val m = map ?: return
-        if (loadingStyle) return
+        if (loadingStyle) { pendingStyle = true; return }
         loadingStyle = true
         status.text = "جاري تحميل الخريطة…"
-        val styleUrl = if (night) "https://tiles.openfreemap.org/styles/dark" else "https://tiles.openfreemap.org/styles/liberty"
+        val styleUrl = appearance.mapStyle
         m.setStyle(Style.Builder().fromUri(styleUrl)) {
             loadingStyle = false
             status.text = if (current != null) "● GPS متصل" else "GPS قيد التحديد"
@@ -215,6 +233,10 @@ class MainActivity : Activity(), LocationListener {
             current?.let { updateUserPin(it) }
             target?.let { targetMarker = m.addMarker(MarkerOptions().position(it).icon(targetIcon)) }
             routeController.onMapStyleLoaded(m)
+            if (pendingStyle) {
+                pendingStyle = false
+                ui.post { loadStyle() }
+            }
         }
         ui.postDelayed({
             if (loadingStyle) {
@@ -235,9 +257,104 @@ class MainActivity : Activity(), LocationListener {
     }
     private fun updateUserPin(loc: Location) {
         val m = map ?: return
-        val p = routeController.snappedPosition(loc) ?: LatLng(loc.latitude, loc.longitude)
-        if (userMarker == null) userMarker = m.addMarker(MarkerOptions().position(p).icon(userIcon))
-        else { userMarker!!.position = p; m.updateMarker(userMarker!!) }
+        val point = routeController.snappedPosition(loc) ?: LatLng(loc.latitude, loc.longitude)
+        val heading = if (navigationalMode && follow && appearance.perspective) 0f
+            else (((lastHeading - m.cameraPosition.bearing + 360.0) % 360.0).toFloat())
+        val carIcon = vehicleIcons.icon(appearance.vehicle, teal, heading)
+        if (userMarker == null) userMarker = m.addMarker(MarkerOptions().position(point).icon(carIcon))
+        else {
+            userMarker!!.position = point
+            userMarker!!.icon = carIcon
+            m.updateMarker(userMarker!!)
+        }
+    }
+    private fun smoothBearing(current: Double, desired: Double): Double {
+        val delta = ((desired - current + 540.0) % 360.0) - 180.0
+        return (current + delta * 0.45 + 360.0) % 360.0
+    }
+    private fun setDrivingMode(active: Boolean) {
+        navigationalMode = active
+        follow = if (active) true else appearance.follow
+        if (appearance.keepScreen && active) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        if (::bottomPanel.isInitialized) bottomPanel.visibility = if (active) View.GONE else View.VISIBLE
+        if (::drivePanel.isInitialized) drivePanel.visibility = if (active) View.VISIBLE else View.GONE
+        if (active) {
+            updateDriveMessage(lastMessage)
+            current?.let { followCamera(it, true) }
+        } else {
+            map?.animateCamera(CameraUpdateFactory.newCameraPosition(
+                CameraPosition.Builder()
+                    .target(map?.cameraPosition?.target ?: LatLng(32.615,44.027))
+                    .zoom(15.4).bearing(0.0).tilt(0.0)
+                    .padding(0.0,0.0,0.0,0.0).build()), 450)
+        }
+    }
+    private fun updateDriveMessage(value: String) {
+        if (!::driveTitle.isInitialized || !::driveDetail.isInitialized) return
+        val parts = value.split("  •  ")
+        driveTitle.text = parts.firstOrNull() ?: "تابع المسار"
+        driveDetail.text = if (parts.size >= 2) parts.drop(1).joinToString("  •  ") else
+            "الملاحة شغالة • انتبه إلى الطريق"
+    }
+    private fun applyAppearance(kind: String) {
+        window.statusBarColor = ink
+        window.navigationBarColor = ink
+        voice.enabled = appearance.voice
+        routeController.autoReroute = appearance.reroute
+        routeController.setAccent(teal)
+        if (kind == "vehicle" || kind == "color") {
+            vehicleIcons.clear()
+            current?.let { updateUserPin(it) }
+        }
+        if (kind == "camera") {
+            follow = appearance.follow
+            if (navigationalMode && appearance.follow) current?.let { followCamera(it,true) }
+        }
+        if (kind == "keep_screen") {
+            if (navigationalMode && appearance.keepScreen) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+        if (kind == "map" || kind == "color") {
+            refreshOverlay()
+            if (kind == "map") loadStyle()
+        }
+    }
+    private fun refreshOverlay() {
+        if (!::uiRoot.isInitialized) return
+        if (uiRoot.childCount > 1) uiRoot.removeViews(1,uiRoot.childCount - 1)
+        makeOverlay(uiRoot)
+        routeInfo.text = lastMessage
+        routeInfo.setOnClickListener { routeController.showChoicesOrCalculate() }
+        setDrivingVisibility()
+        current?.let {
+            speed.text = (if (it.hasSpeed()) (it.speed*3.6).roundToInt() else 0).toString() + "\nكم/س"
+        }
+    }
+    private fun setDrivingVisibility() {
+        if (!::bottomPanel.isInitialized || !::drivePanel.isInitialized) return
+        bottomPanel.visibility = if (navigationalMode) View.GONE else View.VISIBLE
+        drivePanel.visibility = if (navigationalMode) View.VISIBLE else View.GONE
+        if (navigationalMode) updateDriveMessage(lastMessage)
+    }
+    private fun followCamera(loc: Location, immediate: Boolean = false) {
+        val m = map ?: return
+        val latlng = routeController.snappedPosition(loc) ?: LatLng(loc.latitude,loc.longitude)
+        val active = navigationalMode
+        val headingUp = active && appearance.perspective
+        val targetBearing = if (headingUp) lastHeading else 0.0
+        val camera = CameraPosition.Builder()
+            .target(latlng)
+            .zoom(if (active) 17.25 else m.cameraPosition.zoom.coerceAtLeast(15.5))
+            .bearing(targetBearing)
+            .tilt(if (headingUp) 49.0 else 0.0)
+            .padding(
+                0.0,
+                if (active) dp(112).toDouble() else 0.0,
+                0.0,
+                if (active) dp(205).toDouble() else 0.0
+            ).build()
+        m.animateCamera(CameraUpdateFactory.newCameraPosition(camera), if (immediate) 580 else 800)
     }
     private fun hasPermission(): Boolean {
         return checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
