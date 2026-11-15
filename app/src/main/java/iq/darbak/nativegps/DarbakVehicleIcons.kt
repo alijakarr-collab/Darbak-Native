@@ -30,9 +30,13 @@ class DarbakVehicleIcons(private val context: Context) {
             cache.clear()
         }
         val bucket = ((bearing.roundToInt() % 360 + 360) % 360 / 10) % 36
-        return cache.getOrPut(bucket) { draw(vehicle, accent, (bucket * 10).toFloat()) }
+        return cache.getOrPut(bucket) {
+            IconFactory.getInstance(context).fromBitmap(draw(vehicle, accent, (bucket * 10).toFloat()))
+        }
     }
-    private fun draw(vehicle: Int, tint: Int, degrees: Float): Icon {
+    fun bitmap(vehicle: Int, tint: Int): Bitmap = draw(vehicle, tint, 0f)
+
+    private fun draw(vehicle: Int, tint: Int, degrees: Float): Bitmap {
         val bitmap = Bitmap.createBitmap(width, width, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
         val paint = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -116,6 +120,6 @@ class DarbakVehicleIcons(private val context: Context) {
             }
         }
         canvas.restore()
-        return IconFactory.getInstance(context).fromBitmap(bitmap)
+        return bitmap
     }
 }
