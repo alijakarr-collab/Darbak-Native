@@ -9,8 +9,8 @@ android {
         applicationId = "iq.darbak.nativegps"
         minSdk = 26
         targetSdk = 34
-        versionCode = 102
-        versionName = "1.2-iraqi-navigation-beta"
+        versionCode = 200
+        versionName = "2.0-navigation-preview"
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
