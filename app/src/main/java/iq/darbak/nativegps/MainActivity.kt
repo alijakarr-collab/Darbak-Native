@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.Context
+import android.content.res.ColorStateList
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -22,6 +23,7 @@ import android.view.WindowManager
 import android.view.View
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
@@ -157,6 +159,24 @@ class MainActivity : Activity(), LocationListener {
             setOnClickListener { action() }
         }
     }
+    private fun imageButton(drawableId: Int, description: String, action: () -> Unit): ImageView {
+        return ImageView(this).apply {
+            setImageResource(drawableId)
+            imageTintList = ColorStateList.valueOf(foreground)
+            contentDescription = description
+            setPadding(dp(13), dp(13), dp(13), dp(13))
+            background = box(panel, 14)
+            setOnClickListener { action() }
+        }
+    }
+    private fun updateGaugeStyle() {
+        if (!::speed.isInitialized) return
+        speed.visibility = if (appearance.speedVisible) View.VISIBLE else View.GONE
+        speed.textSize = if (appearance.speedStyle == 1) 23f else 20f
+        speed.background = box(ink, if (appearance.speedStyle == 1) 50 else 21)
+        speed.setTextColor(if (appearance.speedStyle == 1) teal else foreground)
+        speed.contentDescription = "عداد سرعة GPS، كم في الساعة"
+    }
     private fun add(root: FrameLayout, view: View, gravity: Int, w: Int, h: Int, margin: Int = 12, vertical: Int = 0) {
         val lp = FrameLayout.LayoutParams(if (w == -1) -1 else dp(w), if (h == -2) -2 else dp(h), gravity)
         lp.setMargins(dp(margin), dp(vertical), dp(margin), dp(vertical))
@@ -169,10 +189,12 @@ class MainActivity : Activity(), LocationListener {
             setPadding(dp(10), dp(5), dp(10), dp(5))
             gravity = Gravity.CENTER_VERTICAL
         }
-        val brand = txt("دَرْبَك 3.0", 20f, true)
+        val brand = txt("دَرْبَك 4.0", 20f, true)
         status = txt("GPS قيد التحديد", 12f, false, muted)
         head.addView(button("☰") { menu() }, LinearLayout.LayoutParams(dp(49), dp(49)))
-        head.addView(button("⚙") { appearance.show(::applyAppearance) }, LinearLayout.LayoutParams(dp(49), dp(49)).apply {
+        head.addView(imageButton(R.drawable.ic_darbak_settings, "الإعدادات والثيمات") {
+            appearance.show(::applyAppearance)
+        }, LinearLayout.LayoutParams(dp(49), dp(49)).apply {
             leftMargin = dp(5)
         })
         head.addView(status, LinearLayout.LayoutParams(0, dp(49), 1f))
@@ -187,12 +209,18 @@ class MainActivity : Activity(), LocationListener {
         tool("◎") { recenter() }
         tool("+") { map?.animateCamera(CameraUpdateFactory.zoomIn(), 230) }
         tool("−") { map?.animateCamera(CameraUpdateFactory.zoomOut(), 230) }
-        tool("🎨") { appearance.show(::applyAppearance) }
+        tools.addView(imageButton(R.drawable.ic_darbak_gauge,"إعدادات العدادات") {
+            appearance.show(::applyAppearance,2)
+        },LinearLayout.LayoutParams(dp(50),dp(49)))
+        tools.addView(View(this),LinearLayout.LayoutParams(dp(1),dp(9)))
         tool("🛣") { routeController.showChoicesOrCalculate() }
-        tool("♫") { routeController.repeatVoice() }
+        tools.addView(imageButton(R.drawable.ic_darbak_volume,"إعادة تعليمات الملاحة") {
+            routeController.repeatVoice()
+        },LinearLayout.LayoutParams(dp(50),dp(49)))
         add(root, tools, Gravity.END or Gravity.CENTER_VERTICAL, 50, -2, 13)
 
         speed = txt("0\nكم/س", 21f, true).apply { background = box(ink, 22) }
+        updateGaugeStyle()
         add(root, speed, Gravity.START or Gravity.BOTTOM, 90, 90, 14, 170)
 
         val bottom = LinearLayout(this).apply {
@@ -411,6 +439,7 @@ class MainActivity : Activity(), LocationListener {
             if (navigationalMode && appearance.keepScreen) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
+        if (kind == "speed" || kind == "speed_style") updateGaugeStyle()
         if (kind == "map" || kind == "color") {
             refreshOverlay()
             if (kind == "map") loadStyle()
@@ -421,6 +450,7 @@ class MainActivity : Activity(), LocationListener {
         if (uiRoot.childCount > 1) uiRoot.removeViews(1,uiRoot.childCount - 1)
         makeOverlay(uiRoot)
         routeInfo.text = lastMessage
+        status.text = current?.let { "● GPS ±"+it.accuracy.roundToInt()+"م" } ?: "GPS قيد التحديد"
         routeInfo.setOnClickListener { routeController.showChoicesOrCalculate() }
         setDrivingVisibility()
         current?.let {
@@ -502,6 +532,7 @@ class MainActivity : Activity(), LocationListener {
     private fun menu() {
         val options = arrayOf(
             "⚙ الإعدادات والثيمات",
+            "◉ لوحة العدادات",
             "🧭 تتبّع مركبتي",
             "🛣 اختيار مسار الرحلة",
             "🔊 إعادة التعليمات الصوتية",
@@ -515,11 +546,12 @@ class MainActivity : Activity(), LocationListener {
             .setItems(options) { _, index ->
                 when (index) {
                     0 -> appearance.show(::applyAppearance)
-                    1 -> recenter()
-                    2 -> routeController.showChoicesOrCalculate()
-                    3 -> routeController.repeatVoice()
-                    4 -> voice.test()
-                    5 -> {
+                    1 -> appearance.show(::applyAppearance,2)
+                    2 -> recenter()
+                    3 -> routeController.showChoicesOrCalculate()
+                    4 -> routeController.repeatVoice()
+                    5 -> voice.test()
+                    6 -> {
                         appearance.setVoice(!appearance.voice)
                         applyAppearance("voice")
                         Toast.makeText(this, if (voice.enabled) "الصوت شغال" else "الصوت مكتوم", Toast.LENGTH_SHORT).show()
