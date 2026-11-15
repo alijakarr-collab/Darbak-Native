@@ -157,6 +157,8 @@ class MainActivity : Activity(), LocationListener {
         tool("+") { map?.animateCamera(CameraUpdateFactory.zoomIn(), 230) }
         tool("−") { map?.animateCamera(CameraUpdateFactory.zoomOut(), 230) }
         tool("☾") { night = !night; loadStyle() }
+        tool("🛣") { routeController.showChoicesOrCalculate() }
+        tool("♫") { routeController.repeatVoice() }
         add(root, tools, Gravity.END or Gravity.CENTER_VERTICAL, 50, -2, 13)
 
         speed = txt("0\nكم/س", 21f, true).apply { background = box(ink, 22) }
@@ -233,7 +235,7 @@ class MainActivity : Activity(), LocationListener {
     }
     private fun updateUserPin(loc: Location) {
         val m = map ?: return
-        val p = LatLng(loc.latitude, loc.longitude)
+        val p = routeController.snappedPosition(loc) ?: LatLng(loc.latitude, loc.longitude)
         if (userMarker == null) userMarker = m.addMarker(MarkerOptions().position(p).icon(userIcon))
         else { userMarker!!.position = p; m.updateMarker(userMarker!!) }
     }
@@ -261,8 +263,8 @@ class MainActivity : Activity(), LocationListener {
         status.text = "● GPS متصل"
         val kph = (if (loc.hasSpeed()) loc.speed * 3.6f else 0f).roundToInt()
         speed.text = kph.toString() + "\nكم/س"
-        updateUserPin(loc)
         routeController.onLocationChanged(loc)
+        updateUserPin(loc)
         if (follow && System.currentTimeMillis() - lastCameraAt > 2200) {
             lastCameraAt = System.currentTimeMillis()
             val m = map ?: return
@@ -284,19 +286,21 @@ class MainActivity : Activity(), LocationListener {
             .target(LatLng(p.latitude, p.longitude)).zoom(16.2).build()), 580)
     }
     private fun menu() {
-        val opts = arrayOf("وضع ليلي / نهاري", "تحديد موقعي", "تغيير الطريق", "اختبار الصوت العراقي", "تشغيل / كتم الصوت", "حذف الوجهة")
+        val opts = arrayOf("وضع ليلي / نهاري", "تحديد موقعي", "تغيير الطريق", "إعادة التعليمات الصوتية", "اختبار الصوت العراقي", "تشغيل / كتم الصوت", "تجنب الشوارع الترابية", "حذف الوجهة")
         AlertDialog.Builder(this).setTitle("دَرْبَك").setItems(opts) { _, index ->
             when (index) {
                 0 -> { night = !night; loadStyle() }
                 1 -> recenter()
                 2 -> routeController.showChoicesOrCalculate()
-                3 -> voice.test()
-                4 -> {
+                3 -> routeController.repeatVoice()
+                4 -> voice.test()
+                5 -> {
                     voice.enabled = !voice.enabled
                     Toast.makeText(this, if (voice.enabled) "الصوت شغّال" else "الصوت مكتوم", Toast.LENGTH_SHORT).show()
                     if (voice.enabled) voice.test()
                 }
-                5 -> {
+                6 -> routeController.toggleAvoidUnpaved()
+                7 -> {
                     target = null
                     targetMarker?.let { map?.removeMarker(it) }
                     targetMarker = null
@@ -317,22 +321,56 @@ class MainActivity : Activity(), LocationListener {
     }
     private fun queryPlace(query: String) {
         if (query.isBlank()) return
-        routeInfo.text = "جاري البحث عن المكان…"
+        routeInfo.text = "جاري البحث عن الأماكن…"
         executor.execute {
             try {
-                val url = "https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=iq&q=" +
-                    URLEncoder.encode(query, "UTF-8")
-                val results = JSONArray(getUrl(url))
-                if (results.length() == 0) throw Exception("لم يُعثر على المكان")
-                val item = results.getJSONObject(0)
-                val p = LatLng(item.getDouble("lat"), item.getDouble("lon"))
-                ui.post {
-                    placeTarget(p)
-                    map?.animateCamera(CameraUpdateFactory.newCameraPosition(CameraPosition.Builder()
-                        .target(p).zoom(15.3).build()), 400)
+                val geo = current?.let { LatLng(it.latitude, it.longitude) } ?: LatLng(32.615, 44.027)
+                val url = "https://photon.komoot.io/api/?limit=7&lat=" + geo.latitude +
+                    "&lon=" + geo.longitude + "&q=" + URLEncoder.encode(query, "UTF-8")
+                val features = JSONObject(getUrl(url)).getJSONArray("features")
+                val labels = ArrayList<String>()
+                val coords = ArrayList<LatLng>()
+                for (i in 0 until features.length()) {
+                    val feature = features.getJSONObject(i)
+                    val props = feature.getJSONObject("properties")
+                    val country = props.optString("countrycode", "").lowercase(Locale.ROOT)
+                    if (country.isNotBlank() && country != "iq") continue
+                    val pair = feature.getJSONObject("geometry").getJSONArray("coordinates")
+                    val place = LatLng(pair.getDouble(1), pair.getDouble(0))
+                    val name = props.optString("name", query)
+                    val city = props.optString("city", props.optString("state", "العراق"))
+                    labels.add(name + " • " + city)
+                    coords.add(place)
                 }
-            } catch (e: Exception) {
-                ui.post { routeInfo.text = "تعذّر البحث، تأكد من الإنترنت" }
+                if (coords.isEmpty()) throw IllegalStateException("No Photon results")
+                ui.post {
+                    routeInfo.text = "اختار وجهتك من نتائج البحث"
+                    AlertDialog.Builder(this)
+                        .setTitle("نتائج البحث — دَرْبَك")
+                        .setItems(labels.toTypedArray()) { _, index ->
+                            val p = coords[index]
+                            placeTarget(p)
+                            map?.animateCamera(CameraUpdateFactory.newCameraPosition(
+                                CameraPosition.Builder().target(p).zoom(15.5).build()), 430)
+                        }.setNegativeButton("رجوع", null).show()
+                }
+            } catch (_: Exception) {
+                // Manual, single-shot fallback. Nominatim is NOT used as typeahead.
+                try {
+                    val url = "https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=iq&q=" +
+                        URLEncoder.encode(query, "UTF-8")
+                    val results = JSONArray(getUrl(url))
+                    if (results.length() == 0) throw IllegalStateException("Place not found")
+                    val item = results.getJSONObject(0)
+                    val p = LatLng(item.getDouble("lat"), item.getDouble("lon"))
+                    ui.post {
+                        placeTarget(p)
+                        map?.animateCamera(CameraUpdateFactory.newCameraPosition(
+                            CameraPosition.Builder().target(p).zoom(15.5).build()), 430)
+                    }
+                } catch (_: Exception) {
+                    ui.post { routeInfo.text = "ما لكيت المكان، جرّب اسم أقرب أو حدده على الخريطة" }
+                }
             }
         }
     }
