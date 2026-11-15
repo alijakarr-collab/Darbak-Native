@@ -79,12 +79,16 @@ class IraqiVoiceGuide(private val activity: Activity) : TextToSpeech.OnInitListe
             engine?.stop()
             media?.release()
             media = null
-            val mp = MediaPlayer.create(activity, id) ?: return false
-            media = mp
+            val fd = activity.resources.openRawResourceFd(id) ?: return false
+            val mp = MediaPlayer()
             mp.setAudioAttributes(
                 AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
                     .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build()
             )
+            mp.setDataSource(fd.fileDescriptor, fd.startOffset, fd.length)
+            fd.close()
+            mp.prepare()
+            media = mp
             mp.setOnCompletionListener { finished ->
                 if (media === finished) media = null
                 finished.release()
