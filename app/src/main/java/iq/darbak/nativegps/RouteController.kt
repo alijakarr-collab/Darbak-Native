@@ -2,6 +2,15 @@ package iq.darbak.nativegps
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.app.Dialog
+import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.ColorDrawable
+import android.view.Gravity
+import android.widget.HorizontalScrollView
+import android.widget.LinearLayout
+import android.widget.TextView
+import org.maplibre.android.camera.CameraUpdateFactory
+import org.maplibre.android.geometry.LatLngBounds
 import android.graphics.Color
 import android.location.Location
 import android.os.Handler
@@ -163,25 +172,126 @@ class RouteController(
     }
     private fun chooseRoute() {
         if (routes.isEmpty()) { calculate(); return }
-        val shortestIndex = routes.indices.minByOrNull { routes[it].kilometers } ?: 0
-        val labels = routes.mapIndexed { i, route ->
+        val density = activity.resources.displayMetrics.density
+        fun dp(v: Int) = (v * density).roundToInt()
+        fun surface(active: Boolean): GradientDrawable = GradientDrawable().apply {
+            setColor(if (active) Color.rgb(25, 70, 68) else Color.rgb(34, 40, 54))
+            cornerRadius = dp(16).toFloat()
+            setStroke(dp(if (active) 2 else 1),
+                if (active) teal else Color.rgb(61, 72, 88))
+        }
+        val dialog = Dialog(activity)
+        val body = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(16), dp(16), dp(16))
+            background = GradientDrawable().apply {
+                setColor(Color.rgb(19, 24, 35))
+                cornerRadii = floatArrayOf(dp(23).toFloat(),dp(23).toFloat(),
+                    dp(23).toFloat(),dp(23).toFloat(),0f,0f,0f,0f)
+            }
+        }
+        val title = TextView(activity).apply {
+            text = "🛣  اختار طريقك"
+            textSize = 20f
+            setTextColor(Color.WHITE)
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            gravity = Gravity.RIGHT or Gravity.CENTER_VERTICAL
+        }
+        body.addView(title, LinearLayout.LayoutParams(-1, dp(38)))
+        val note = TextView(activity).apply {
+            text = if (routes.size == 1)
+                "خدمة المسارات لكت طريق واحد فقط • " + routes[0].summary
+                else "اضغط على المسار حتى تشوفه باللون الأخضر • " + routes[0].summary
+            textSize = 12f
+            setTextColor(Color.rgb(166, 177, 194))
+            gravity = Gravity.RIGHT or Gravity.CENTER_VERTICAL
+        }
+        body.addView(note, LinearLayout.LayoutParams(-1, dp(34)))
+        val scroll = HorizontalScrollView(activity).apply {
+            isHorizontalScrollBarEnabled = false
+        }
+        val strip = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL }
+        val cards = ArrayList<TextView>()
+        fun refresh() {
+            for (i in cards.indices) cards[i].background = surface(i == chosenIndex)
+        }
+        val shortest = routes.indices.minByOrNull { routes[it].kilometers } ?: 0
+        for (i in routes.indices) {
+            val route = routes[i]
             val label = when {
                 i == 0 -> "⚡ الأسرع"
-                i == shortestIndex -> "📍 الأقصر"
+                i == shortest -> "📍 الأقصر"
                 else -> "🛣 بديل " + (i + 1)
             }
-            val km = String.format(Locale.US, "%.1f", route.kilometers)
-            label + " — " + km + " كم • " + route.minutes + " دقيقة"
-        }.toTypedArray()
-        AlertDialog.Builder(activity)
-            .setTitle("اختار الطريق اللي يناسبك")
-            .setSingleChoiceItems(labels, chosenIndex.coerceIn(0, routes.lastIndex)) { _, i ->
-                chosenIndex = i
-                renderRoutes()
+            val card = TextView(activity).apply {
+                val km = String.format(Locale.US,"%.1f",route.kilometers)
+                text = label + "\n" + route.minutes + " دقيقة\n" + km + " كم"
+                textSize = 16f
+                setTextColor(Color.WHITE)
+                gravity = Gravity.CENTER
+                setLineSpacing(dp(5).toFloat(),1f)
+                setOnClickListener {
+                    chosenIndex = i
+                    refresh()
+                    renderRoutes()
+                    try {
+                        val m = map
+                        if (m != null) {
+                            val bounds = LatLngBounds.Builder()
+                            val stride = (route.points.size / 180).coerceAtLeast(1)
+                            for (k in route.points.indices step stride) bounds.include(route.points[k])
+                            bounds.include(route.points.last())
+                            m.animateCamera(CameraUpdateFactory.newLatLngBounds(bounds.build(),dp(72)),430)
+                        }
+                    } catch (_: Exception) {}
+                }
             }
-            .setPositiveButton("ابدأ الملاحة") { _, _ -> begin() }
-            .setNegativeButton("رجوع", null)
-            .show()
+            cards.add(card)
+            strip.addView(card, LinearLayout.LayoutParams(dp(133),dp(112)).apply {
+                setMargins(dp(3),dp(3),dp(7),dp(7))
+            })
+        }
+        refresh()
+        scroll.addView(strip)
+        body.addView(scroll, LinearLayout.LayoutParams(-1,dp(127)))
+        val controls = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL }
+        val cancel = TextView(activity).apply {
+            text = "رجوع"
+            gravity = Gravity.CENTER
+            textSize = 15f
+            setTextColor(Color.WHITE)
+            background = surface(false)
+            setOnClickListener { dialog.dismiss() }
+        }
+        val start = TextView(activity).apply {
+            text = "▶  ابدأ الملاحة"
+            gravity = Gravity.CENTER
+            textSize = 17f
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            setTextColor(Color.rgb(7,34,29))
+            background = GradientDrawable().apply {
+                setColor(teal)
+                cornerRadius = dp(15).toFloat()
+            }
+            setOnClickListener {
+                begin()
+                dialog.dismiss()
+            }
+        }
+        controls.addView(cancel,LinearLayout.LayoutParams(0,dp(50),1f).apply {
+            rightMargin = dp(6)
+        })
+        controls.addView(start,LinearLayout.LayoutParams(0,dp(50),2f))
+        body.addView(controls)
+        dialog.setContentView(body)
+        dialog.show()
+        dialog.window?.apply {
+            setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            setLayout(-1,-2)
+            setGravity(Gravity.BOTTOM)
+            attributes = attributes.apply { dimAmount = 0.24f }
+            addFlags(android.view.WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+        }
     }
     private fun begin() {
         if (chosenIndex !in routes.indices) return
