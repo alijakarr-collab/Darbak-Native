@@ -1,0 +1,27 @@
+name: Export complete Darbak source ZIP
+on:
+  push:
+    paths:
+      - .github/workflows/export-source.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Package complete Android source
+        shell: bash
+        run: |
+          set -euo pipefail
+          zip -r -q -9 Darbak_Native_Full_Source.zip . -x '.git/*' '.git' 'Darbak_Native_Full_Source.zip'
+          unzip -t Darbak_Native_Full_Source.zip | tail -n 1
+          unzip -Z1 Darbak_Native_Full_Source.zip | head -n 40
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Darbak-Native-Full-Source-ZIP
+          path: Darbak_Native_Full_Source.zip
+          if-no-files-found: error
+          retention-days: 30
