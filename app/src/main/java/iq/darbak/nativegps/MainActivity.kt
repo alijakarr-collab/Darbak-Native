@@ -46,8 +46,6 @@ import org.maplibre.android.style.sources.GeoJsonSource
 import org.maplibre.android.style.layers.SymbolLayer
 import org.maplibre.android.style.layers.Property
 import org.maplibre.android.style.layers.PropertyFactory
-import com.mapbox.geojson.Feature
-import com.mapbox.geojson.Point
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
@@ -344,6 +342,10 @@ class MainActivity : Activity(), LocationListener {
     }
     // MapLibre annotation Markers are deprecated and can fail to refresh when changing
     // custom icons. Use a native style SymbolLayer with an updating GeoJSON source instead.
+    private fun vehicleGeoJson(lat: Double, lng: Double): String =
+        "{\"type\":\"FeatureCollection\",\"features\":[{\"type\":\"Feature\",\"geometry\":{\"type\":\"Point\",\"coordinates\":[" +
+            lng.toString() + "," + lat.toString() + "]},\"properties\":{}}]}"
+
     private fun setupVehicleLayer(m: MapLibreMap) {
         val style = m.style ?: return
         val initial = current?.let { routeController.snappedPosition(it) ?: LatLng(it.latitude,it.longitude) }
@@ -351,7 +353,7 @@ class MainActivity : Activity(), LocationListener {
         try {
             style.addImage(vehicleSpriteId, vehicleIcons.bitmap(appearance.vehicle,teal))
             val source = GeoJsonSource(vehicleSourceId,
-                Feature.fromGeometry(Point.fromLngLat(initial.longitude,initial.latitude)))
+                vehicleGeoJson(initial.latitude,initial.longitude))
             style.addSource(source)
             val layer = SymbolLayer(vehicleLayerId,vehicleSourceId).withProperties(
                 PropertyFactory.iconImage(vehicleSpriteId),
@@ -385,8 +387,7 @@ class MainActivity : Activity(), LocationListener {
         val m = map ?: return
         if (userSource == null || userLayer == null) setupVehicleLayer(m)
         val point = routeController.snappedPosition(loc) ?: LatLng(loc.latitude,loc.longitude)
-        val feature = Feature.fromGeometry(Point.fromLngLat(point.longitude,point.latitude))
-        userSource?.setGeoJson(feature)
+        userSource?.setGeoJson(vehicleGeoJson(point.latitude,point.longitude))
         userLayer?.setProperties(
             PropertyFactory.visibility(Property.VISIBLE),
             PropertyFactory.iconRotate(lastHeading.toFloat())
