@@ -53,6 +53,13 @@ class RouteController(
         private set
     var autoReroute = true
     fun isNavigating(): Boolean = navigating
+    fun endNavigation() {
+        if (!navigating) return
+        navigating = false
+        onNavigationState(false)
+        showMessage("تم إنهاء القيادة • اضغط لعرض المسارات مجدداً")
+        voice.say("تم إنهاء الملاحة، الحمد لله عالسلامة")
+    }
     fun setAccent(color: Int) {
         teal = color
         renderRoutes()
@@ -311,7 +318,6 @@ class RouteController(
     private fun begin() {
         if (chosenIndex !in routes.indices) return
         navigating = true
-        onNavigationState(true)
         cursor = 0
         for (t in routes[chosenIndex].turns) t.warned = false
         val selected = routes[chosenIndex]
@@ -343,6 +349,7 @@ class RouteController(
         }
         val km = String.format(Locale.US, "%.1f", selected.kilometers)
         showMessage("المسار المختار: " + km + " كم • " + selected.minutes + " دقيقة. اضغط لتغييره")
+        onNavigationState(true)
         voice.say("تم اختيار الطريق. يلا على بركة الله، تابع التعليمات")
         renderRoutes()
     }
@@ -404,6 +411,17 @@ class RouteController(
             return
         }
         offRouteSamples = 0
+        val dest = destination
+        if (dest != null && loc.distanceTo(Location("destination").apply {
+                latitude = dest.latitude; longitude = dest.longitude
+            }) <= 25f &&
+            progressMeters > (cumulative.lastOrNull() ?: Double.MAX_VALUE) - 75.0) {
+            navigating = false
+            onNavigationState(false)
+            showMessage("وصلت لوجهتك • الحمد لله عالسلامة")
+            voice.say("وصلت لوجهتك، الحمد لله عالسلامة", "arrive")
+            return
+        }
         segmentIndex = maxOf(segmentIndex, match.segment)
         progressMeters = maxOf(progressMeters, match.along)
         val turns = route.turns
