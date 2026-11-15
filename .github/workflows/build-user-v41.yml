@@ -1,0 +1,71 @@
+name: Build exact uploaded Darbak Native v4.1 (untouched)
+on:
+  push:
+    branches:
+      - build-v4-1-user-upload
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Install Android SDK 35 for build environment (not source)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          export ANDROID_HOME="$HOME/android-sdk"
+          export ANDROID_SDK_ROOT="$ANDROID_HOME"
+          mkdir -p "$ANDROID_HOME/cmdline-tools/latest"
+          curl -fsSL --retry 3 -o /tmp/cmdline-tools.zip "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip"
+          unzip -q /tmp/cmdline-tools.zip -d /tmp/cmdtools
+          mv /tmp/cmdtools/cmdline-tools/* "$ANDROID_HOME/cmdline-tools/latest/"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$ANDROID_HOME" --licenses >/dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$ANDROID_HOME" "platforms;android-35" "build-tools;35.0.0" "platform-tools"
+      - name: Reconstruct and verify exact 52 source files from the uploaded ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat upload/chunk_{00..10}.b64 | base64 -d > /tmp/darbak_v41_uploaded_source.tar.xz
+          echo "83d106a06223539c393dead7cf2741e44d8c77fb46d55bf84210cc3d73e954e6  /tmp/darbak_v41_uploaded_source.tar.xz" | sha256sum -c -
+          mkdir -p /tmp/Darbak_v41_original_source
+          tar -xJf /tmp/darbak_v41_uploaded_source.tar.xz -C /tmp/Darbak_v41_original_source
+          mkdir -p /tmp/Darbak_v41_original_source/app/src/main/res/raw
+          cp app/src/main/res/raw/*.mp3 /tmp/Darbak_v41_original_source/app/src/main/res/raw/
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          root=Path('/tmp/Darbak_v41_original_source')
+          lines=[]
+          for path in root.rglob('*'):
+              if path.is_file():
+                  rel=path.relative_to(root).as_posix()
+                  lines.append(rel+'\t'+hashlib.sha256(path.read_bytes()).hexdigest())
+          actual=hashlib.sha256(('\n'.join(sorted(lines))+'\n').encode()).hexdigest()
+          expected='481dee1044dadaf53e327159358de81a00aac2c3d39853536f404d9ca95532c7'
+          print('Original files:',len(lines),'Original manifest SHA256:',actual)
+          if len(lines)!=52 or actual!=expected:
+              raise SystemExit('Source files mismatch: refusing to build altered code')
+          print('Exact match to uploaded ZIP, no source edits.')
+          PY
+      - name: Build the original uploaded code without editing anything
+        shell: bash
+        run: gradle --no-daemon --project-dir /tmp/Darbak_v41_original_source :app:assembleDebug --stacktrace
+      - name: Upload installable APK from exact uploaded project
+        uses: actions/upload-artifact@v4
+        with:
+          name: Darbak-v4.1-User-Redesign-APK
+          path: /tmp/Darbak_v41_original_source/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
