@@ -97,6 +97,20 @@ jobs:
           p.write_text("".join(lines))
           print("Fixed only three incompatible callback nullability signatures in build directory")
           PY
+      - name: Move two offline-map labels before first use (build copy only)
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("/tmp/darbak433-original/app/src/main/java/iq/darbak/nativegps/MainActivity.kt")
+          s=p.read_text()
+          decl='        val heroCount = kit.label("0", 30f, true, p.accentInk)\n        val heroText = kit.label("", 12.5f, false, p.muted)\n'
+          use='        hero.addView(heroCount, kit.lp(WRAP, WRAP).apply { marginEnd = kit.dp(12) })'
+          assert s.count(decl)==1 and s.count(use)==1 and s.index(use)<s.index(decl)
+          s=s.replace(decl,'').replace(use,decl+use,1)
+          p.write_text(s)
+          print("Moved two local view declarations before usage; no UI changes.")
+          PY
       - name: Assemble APK
         run: gradle --no-daemon --project-dir /tmp/darbak433-original :app:assembleDebug --stacktrace
       - name: Upload installable v4.3.3 APK
