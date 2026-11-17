@@ -1,0 +1,89 @@
+name: Build Darbak Native v4.3.2 APK from exact user update
+on:
+  push:
+    branches: [build-v4-3-2-user-upload]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Install Android SDK 35
+        shell: bash
+        run: |
+          set -euxo pipefail
+          export ANDROID_HOME="$HOME/android-sdk"
+          export ANDROID_SDK_ROOT="$ANDROID_HOME"
+          mkdir -p "$ANDROID_HOME/cmdline-tools/latest"
+          curl -fsSL --retry 3 -o /tmp/cmdline-tools.zip "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip"
+          unzip -q /tmp/cmdline-tools.zip -d /tmp/cmdtools
+          mv /tmp/cmdtools/cmdline-tools/* "$ANDROID_HOME/cmdline-tools/latest/"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$ANDROID_HOME" --licenses >/dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$ANDROID_HOME" "platforms;android-35" "build-tools;35.0.0" "platform-tools"
+      - name: Recover original uploaded v4.3 files
+        shell: bash
+        run: |
+          set -euo pipefail
+          base64 -d upload/darbak43_source.b64 > /tmp/darbak43-source.tar.xz
+          echo "425bba8e67e2641854048a8cfc4b65c1c5aaaaa5965648e8f10d91a94c5216a1  /tmp/darbak43-source.tar.xz" | sha256sum --check --status
+          mkdir -p /tmp/darbak432-original
+          tar -xJf /tmp/darbak43-source.tar.xz -C /tmp/darbak432-original
+          mkdir -p /tmp/darbak432-original/app/src/main/res/raw
+          cp audio/*.mp3 /tmp/darbak432-original/app/src/main/res/raw/
+      - name: Apply exact user v4.3.2 changes and verify all 76 source files
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat upload/v432_delta_part_{0,1,2}.b64 | base64 -d > /tmp/darbak432-delta.tar.xz
+          echo "25387d195c5dd260920dfd7112f93781085482ab7a91447a701d8922ec2805ae  /tmp/darbak432-delta.tar.xz" | sha256sum -c -
+          mkdir -p /tmp/darbak432-delta
+          tar -xJf /tmp/darbak432-delta.tar.xz -C /tmp/darbak432-delta
+          patch --batch --forward -d /tmp/darbak432-original -p1 -i /tmp/darbak432-delta/delta.patch
+          cp /tmp/darbak432-delta/IraqGeo.kt /tmp/darbak432-original/app/src/main/java/iq/darbak/nativegps/IraqGeo.kt
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          root=Path("/tmp/darbak432-original")
+          items=[p.relative_to(root).as_posix()+"\t"+hashlib.sha256(p.read_bytes()).hexdigest() for p in root.rglob("*") if p.is_file()]
+          manifest=hashlib.sha256(("\n".join(sorted(items))+"\n").encode()).hexdigest()
+          print("v4.3.2 files:",len(items),"manifest:",manifest)
+          assert len(items)==76 and manifest=="d3f2124dd2be0181c1e1be8d10a90bfd80896a096b9d3b1c092bcad2305bf84d", "Uploaded v4.3.2 source differs — stopping"
+          PY
+      - name: Apply MapLibre callback compatibility fixes in build copy only
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("/tmp/darbak432-original/app/src/main/java/iq/darbak/nativegps/OfflineMaps.kt")
+          text=p.read_text()
+          old="override fun onError(error: String?)"
+          assert text.count(old)==4
+          lines=text.splitlines(keepends=True)
+          for lineno in (118,206,245):
+              assert old in lines[lineno-1], "Unexpected callback signature in v4.3.2"
+              lines[lineno-1]=lines[lineno-1].replace(old, "override fun onError(error: String)")
+          p.write_text("".join(lines))
+          print("Fixed only three incompatible callback nullability signatures in build directory")
+          PY
+      - name: Assemble APK
+        run: gradle --no-daemon --project-dir /tmp/darbak432-original :app:assembleDebug --stacktrace
+      - name: Upload installable v4.3.2 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Darbak-v4.3.2-User-Update-APK
+          path: /tmp/darbak432-original/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
