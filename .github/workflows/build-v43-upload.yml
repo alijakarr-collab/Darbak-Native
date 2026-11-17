@@ -1,0 +1,66 @@
+name: Build exact uploaded Darbak Native v4.3 APK
+on:
+  push:
+    branches: [build-v4-3-user-upload]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Install Android SDK 35
+        shell: bash
+        run: |
+          set -euxo pipefail
+          export ANDROID_HOME="$HOME/android-sdk"
+          export ANDROID_SDK_ROOT="$ANDROID_HOME"
+          mkdir -p "$ANDROID_HOME/cmdline-tools/latest"
+          curl -fsSL --retry 3 -o /tmp/cmdline-tools.zip "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip"
+          unzip -q /tmp/cmdline-tools.zip -d /tmp/cmdtools
+          mv /tmp/cmdtools/cmdline-tools/* "$ANDROID_HOME/cmdline-tools/latest/"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$ANDROID_HOME" --licenses >/dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$ANDROID_HOME" "platforms;android-35" "build-tools;35.0.0" "platform-tools"
+      - name: Recover exact uploaded v4.3 files and verify SHA256
+        shell: bash
+        run: |
+          set -euo pipefail
+          base64 -d upload/darbak43_source.b64 > /tmp/darbak43-source.tar.xz
+          echo "425bba8e67e2641854048a8cfc4b65c1c5aaaaa5965648e8f10d91a94c5216a1  /tmp/darbak43-source.tar.xz" | sha256sum --check --status
+          mkdir -p /tmp/darbak43-original
+          tar -xJf /tmp/darbak43-source.tar.xz -C /tmp/darbak43-original
+          mkdir -p /tmp/darbak43-original/app/src/main/res/raw
+          cp audio/*.mp3 /tmp/darbak43-original/app/src/main/res/raw/
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          root=Path("/tmp/darbak43-original")
+          items=[]
+          for f in root.rglob("*"):
+              if f.is_file():
+                  items.append(f.relative_to(root).as_posix()+"\t"+hashlib.sha256(f.read_bytes()).hexdigest())
+          manifest=hashlib.sha256(("\n".join(sorted(items))+"\n").encode()).hexdigest()
+          print("Matched files:", len(items), "SHA256:", manifest)
+          assert len(items)==75 and manifest=="0e3bcffd32fb0d70c829faaca0694adc90ff78e31982821c123185f800f0d071", "User upload mismatch — stopping"
+          PY
+      - name: Build unmodified v4.3 project
+        shell: bash
+        run: gradle --no-daemon --project-dir /tmp/darbak43-original :app:assembleDebug --stacktrace
+      - name: Upload original project APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Darbak-v4.3-Pro-APK
+          path: /tmp/darbak43-original/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
