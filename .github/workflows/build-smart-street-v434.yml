@@ -1,0 +1,201 @@
+name: Darbak 4.3.4 Smart Street Routing APK
+on:
+  push:
+    branches: [fix-alternative-routes-road-snap-auto-reroute]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Install Android SDK 35
+        shell: bash
+        run: |
+          set -euxo pipefail
+          export ANDROID_HOME="$HOME/android-sdk"
+          export ANDROID_SDK_ROOT="$ANDROID_HOME"
+          mkdir -p "$ANDROID_HOME/cmdline-tools/latest"
+          curl -fsSL --retry 3 -o /tmp/cmdline-tools.zip "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip"
+          unzip -q /tmp/cmdline-tools.zip -d /tmp/cmdtools
+          mv /tmp/cmdtools/cmdline-tools/* "$ANDROID_HOME/cmdline-tools/latest/"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$ANDROID_HOME" --licenses >/dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$ANDROID_HOME" "platforms;android-35" "build-tools;35.0.0" "platform-tools"
+      - name: Recover original uploaded v4.3 files
+        shell: bash
+        run: |
+          set -euo pipefail
+          base64 -d upload/darbak43_source.b64 > /tmp/darbak43-source.tar.xz
+          echo "425bba8e67e2641854048a8cfc4b65c1c5aaaaa5965648e8f10d91a94c5216a1  /tmp/darbak43-source.tar.xz" | sha256sum --check --status
+          mkdir -p /tmp/darbak433-original
+          tar -xJf /tmp/darbak43-source.tar.xz -C /tmp/darbak433-original
+          mkdir -p /tmp/darbak433-original/app/src/main/res/raw
+          cp audio/*.mp3 /tmp/darbak433-original/app/src/main/res/raw/
+      - name: Apply exact user v4.3.2 changes and verify all 76 source files
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat upload/v432_delta_part_{0,1,2}.b64 | base64 -d > /tmp/darbak432-delta.tar.xz
+          echo "25387d195c5dd260920dfd7112f93781085482ab7a91447a701d8922ec2805ae  /tmp/darbak432-delta.tar.xz" | sha256sum -c -
+          mkdir -p /tmp/darbak432-delta
+          tar -xJf /tmp/darbak432-delta.tar.xz -C /tmp/darbak432-delta
+          patch --batch --forward -d /tmp/darbak433-original -p1 -i /tmp/darbak432-delta/delta.patch
+          cp /tmp/darbak432-delta/IraqGeo.kt /tmp/darbak433-original/app/src/main/java/iq/darbak/nativegps/IraqGeo.kt
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          root=Path("/tmp/darbak433-original")
+          items=[p.relative_to(root).as_posix()+"\t"+hashlib.sha256(p.read_bytes()).hexdigest() for p in root.rglob("*") if p.is_file()]
+          manifest=hashlib.sha256(("\n".join(sorted(items))+"\n").encode()).hexdigest()
+          print("v4.3.2 files:",len(items),"manifest:",manifest)
+          assert len(items)==76 and manifest=="d3f2124dd2be0181c1e1be8d10a90bfd80896a096b9d3b1c092bcad2305bf84d", "Uploaded v4.3.2 source differs — stopping"
+          PY
+      - name: Apply exact user v4.3.3 patch and verify all 76 original files
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat upload/v433_delta_part_{0,1,2,3}.b64 | base64 -d > /tmp/darbak433-delta.tar.xz
+          echo "cc202d3dc6fff4f50d656f39fed006eb52640a2bde6bb904affa79851d6f5ac9  /tmp/darbak433-delta.tar.xz" | sha256sum -c -
+          mkdir -p /tmp/darbak433-delta
+          tar -xJf /tmp/darbak433-delta.tar.xz -C /tmp/darbak433-delta
+          patch --batch --forward -d /tmp/darbak433-original -p1 -i /tmp/darbak433-delta/delta.patch
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          root=Path("/tmp/darbak433-original")
+          items=[p.relative_to(root).as_posix()+"\t"+hashlib.sha256(p.read_bytes()).hexdigest() for p in root.rglob("*") if p.is_file()]
+          manifest=hashlib.sha256(("\n".join(sorted(items))+"\n").encode()).hexdigest()
+          print("v4.3.3 user source files:",len(items),"manifest SHA256:",manifest)
+          assert len(items)==76 and manifest=="0603da3c72cd2cc99049c6ca5160d69e81ba80fefb82968aea3f159e6897d216", "Uploaded v4.3.3 source differs — stopping"
+          PY
+      - name: Apply route reliability patch only in temporary build copy
+        shell: bash
+        run: |
+          set -euo pipefail
+          base64 -d upload/video-review-hotfix.patch.xz.b64 > /tmp/video-review-hotfix.patch.xz
+          echo "e61530a9a834409b92672b2a6aa1fc32960d3edd414a99b41e354e039acf9c09  /tmp/video-review-hotfix.patch.xz" | sha256sum -c -
+          xz -d -k /tmp/video-review-hotfix.patch.xz
+          patch --batch --forward -d /tmp/darbak433-original -p1 -i /tmp/video-review-hotfix.patch
+          echo "Changes limited to route cache / stale line removal / connection state / destination cleanup."
+      - name: Safety guard - never reuse old cached route for an off-route reroute
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          root=Path("/tmp/darbak433-original/app/src/main/java/iq/darbak/nativegps")
+          p=root/"RouteRepository.kt"
+          s=p.read_text()
+          before="avoidTolls: Boolean = false, avoidHighways: Boolean = false"
+          assert s.count(before)==1
+          s=s.replace(before,"avoidTolls: Boolean = false, avoidHighways: Boolean = false, allowCached: Boolean = true")
+          before="if (!hasInternet()) return recent(from, dest, flags)"
+          assert s.count(before)==1
+          s=s.replace(before,"if (!hasInternet()) return (if (allowCached) recent(from, dest, flags) else null)")
+          before="recent(from, dest, flags) ?: throw e"
+          assert s.count(before)==1
+          s=s.replace(before,"(if (allowCached) recent(from, dest, flags) else null) ?: throw e")
+          p.write_text(s)
+          p=root/"RouteController.kt"
+          s=p.read_text()
+          before="repository.routes(origin, dest, preference, tolls, highways)"
+          assert s.count(before)==1
+          s=s.replace(before,"repository.routes(origin, dest, preference, tolls, highways, allowCached = !resumeAfter)")
+          p.write_text(s)
+          print("Offline reroute cannot silently recycle a stale cached route.")
+          PY
+      - name: Apply MapLibre callback compatibility fixes in build copy only
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("/tmp/darbak433-original/app/src/main/java/iq/darbak/nativegps/OfflineMaps.kt")
+          text=p.read_text()
+          old="override fun onError(error: String?)"
+          assert text.count(old)==4
+          lines=text.splitlines(keepends=True)
+          for lineno in (118,206,245):
+              assert old in lines[lineno-1], "Unexpected callback signature in v4.3.2"
+              lines[lineno-1]=lines[lineno-1].replace(old, "override fun onError(error: String)")
+          p.write_text("".join(lines))
+          print("Fixed only three incompatible callback nullability signatures in build directory")
+          PY
+      - name: Move two offline-map labels before first use (build copy only)
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("/tmp/darbak433-original/app/src/main/java/iq/darbak/nativegps/MainActivity.kt")
+          s=p.read_text()
+          decl='        val heroCount = kit.label("0", 30f, true, p.accentInk)\n        val heroText = kit.label("", 12.5f, false, p.muted)\n'
+          use='        hero.addView(heroCount, kit.lp(WRAP, WRAP).apply { marginEnd = kit.dp(12) })'
+          assert s.count(decl)==1 and s.count(use)==1 and s.index(use)<s.index(decl)
+          s=s.replace(decl,'').replace(use,decl+use,1)
+          p.write_text(s)
+          print("Moved two local view declarations before usage; no UI changes.")
+          PY
+      - name: Apply camera start - clear full route - never exit on Back
+        shell: bash
+        run: |
+          set -euxo pipefail
+          base64 -d upload/route-start-cancel-back-ux.patch.xz.b64 > /tmp/darbak-ux.patch.xz
+          echo "977bf5362f267722f73821efc5d996a683359ad44561a8aebe31fda3369911f7  /tmp/darbak-ux.patch.xz" | sha256sum -c -
+          xz -d -k /tmp/darbak-ux.patch.xz
+          patch --batch --forward -d /tmp/darbak433-original -p1 -i /tmp/darbak-ux.patch
+          grep -q 'focusRouteStart(start, started)' /tmp/darbak433-original/app/src/main/java/iq/darbak/nativegps/MainActivity.kt
+          grep -q 'onBackInvokedDispatcher.registerOnBackInvokedCallback' /tmp/darbak433-original/app/src/main/java/iq/darbak/nativegps/MainActivity.kt
+      - name: Mark APK as route-camera-back UX fix build
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("/tmp/darbak433-original/app/build.gradle.kts")
+          s=p.read_text()
+          assert 'versionCode = 434' in s and 'versionName = "4.3.3-route-stability"' in s
+          s=s.replace('versionCode = 434','versionCode = 435')
+          s=s.replace('versionName = "4.3.3-route-stability"','versionName = "4.3.3-route-ux-fix"')
+          p.write_text(s)
+          PY
+      - name: Apply verified real grey routes, street-start indicator and automatic rerouting
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat upload/route436_part_{0,1,2,3}.b64 | base64 -d > /tmp/darbak-smart-street.patch.xz
+          echo "7a60363a656c586922891623eefc8f8e1bbd2749cbe03e09cd928d55b4dc06bf  /tmp/darbak-smart-street.patch.xz" | sha256sum -c -
+          xz -d -k /tmp/darbak-smart-street.patch.xz
+          patch --batch --forward -d /tmp/darbak433-original -p1 -i /tmp/darbak-smart-street.patch
+          grep -q 'updateStreetStartPin' /tmp/darbak433-original/app/src/main/java/iq/darbak/nativegps/RouteController.kt
+          grep -q 'sameRoadGeometry' /tmp/darbak433-original/app/src/main/java/iq/darbak/nativegps/RouteRepository.kt
+          grep -q 'wrongWaySamples' /tmp/darbak433-original/app/src/main/java/iq/darbak/nativegps/RouteController.kt
+      - name: Bump tested Android build to 4.3.4
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("/tmp/darbak433-original/app/build.gradle.kts")
+          s=p.read_text()
+          assert 'versionCode = 435' in s and 'versionName = "4.3.3-route-ux-fix"' in s
+          s=s.replace('versionCode = 435','versionCode = 436')
+          s=s.replace('versionName = "4.3.3-route-ux-fix"', 'versionName = "4.3.4-smart-street-routing"')
+          p.write_text(s)
+          PY
+      - name: Assemble APK
+        run: gradle --no-daemon --project-dir /tmp/darbak433-original :app:assembleDebug --stacktrace
+      - name: Upload smart street rerouting APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Darbak-4.3.4-Smart-Street-Routes-APK
+          path: /tmp/darbak433-original/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
