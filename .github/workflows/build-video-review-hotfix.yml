@@ -89,6 +89,32 @@ jobs:
           xz -d -k /tmp/video-review-hotfix.patch.xz
           patch --batch --forward -d /tmp/darbak433-original -p1 -i /tmp/video-review-hotfix.patch
           echo "Changes limited to route cache / stale line removal / connection state / destination cleanup."
+      - name: Safety guard - never reuse old cached route for an off-route reroute
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          root=Path("/tmp/darbak433-original/app/src/main/java/iq/darbak/nativegps")
+          p=root/"RouteRepository.kt"
+          s=p.read_text()
+          before="avoidTolls: Boolean = false, avoidHighways: Boolean = false"
+          assert s.count(before)==1
+          s=s.replace(before,"avoidTolls: Boolean = false, avoidHighways: Boolean = false, allowCached: Boolean = true")
+          before="if (!hasInternet()) return recent(from, dest, flags)"
+          assert s.count(before)==1
+          s=s.replace(before,"if (!hasInternet()) return (if (allowCached) recent(from, dest, flags) else null)")
+          before="recent(from, dest, flags) ?: throw e"
+          assert s.count(before)==1
+          s=s.replace(before,"(if (allowCached) recent(from, dest, flags) else null) ?: throw e")
+          p.write_text(s)
+          p=root/"RouteController.kt"
+          s=p.read_text()
+          before="repository.routes(origin, dest, preference, tolls, highways)"
+          assert s.count(before)==1
+          s=s.replace(before,"repository.routes(origin, dest, preference, tolls, highways, allowCached = !resumeAfter)")
+          p.write_text(s)
+          print("Offline reroute cannot silently recycle a stale cached route.")
+          PY
       - name: Apply MapLibre callback compatibility fixes in build copy only
         shell: bash
         run: |
