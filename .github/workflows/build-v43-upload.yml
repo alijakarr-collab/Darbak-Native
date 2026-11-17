@@ -55,7 +55,21 @@ jobs:
           print("Matched files:", len(items), "SHA256:", manifest)
           assert len(items)==75 and manifest=="0e3bcffd32fb0d70c829faaca0694adc90ff78e31982821c123185f800f0d071", "User upload mismatch — stopping"
           PY
-      - name: Build unmodified v4.3 project
+      - name: Apply three MapLibre nullability API compatibility corrections only in build copy
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("/tmp/darbak43-original/app/src/main/java/iq/darbak/nativegps/OfflineMaps.kt")
+          lines=p.read_text().splitlines(keepends=True)
+          for lineno in (118,206,245):
+              old="override fun onError(error: String?)"
+              assert old in lines[lineno-1], "Unexpected source line "+str(lineno)
+              lines[lineno-1]=lines[lineno-1].replace(old,"override fun onError(error: String)")
+          p.write_text("".join(lines))
+          print("Corrected only 3 OfflineMaps.kt callback signatures")
+          PY
+      - name: Build original v4.3 with minimal callback compatibility fix
         shell: bash
         run: gradle --no-daemon --project-dir /tmp/darbak43-original :app:assembleDebug --stacktrace
       - name: Upload original project APK
